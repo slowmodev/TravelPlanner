@@ -2,37 +2,53 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
-use App\Models\LocationOverview;
-use App\Models\Hotel;
-use App\Models\Itinerary;
-use App\Models\Activity;
+use Carbon\Carbon;
 use App\Models\Cost;
-use App\Models\TransportationCost;
+use App\Models\Hotel;
+use App\Models\Activity;
+use App\Models\Itinerary;
 use App\Models\DiningCost;
+use Illuminate\Http\Request;
+use App\Models\SecurityAdvice;
+use App\Models\LocationOverview;
+use App\Models\TransportationCost;
+use Illuminate\Support\Facades\Http;
 use App\Models\AdditionalInformation;
+use App\Models\TripDetail;
+use Illuminate\Support\Str;
 
 class TravelController extends Controller
 {
     public function generateTravelPlan(Request $request)
     {
         // Step 1: Validate the form data
-        $request->validate([
-            'location' => 'required|string',
-            'date' => 'required|date',
-            'duration' => 'required|integer|min:1',
-            'budget' => 'required|string',
-            'traveler' => 'required|string',
-            'activities' => 'required|array',
-        ]);
+        // $request->validate([
+        //     'location' => 'required|string',
+        //     'date' => 'required|date',
+        //     'duration' => 'required|integer|min:1',
+        //     'budget' => 'required|string',
+        //     'traveler' => 'required|string',
+        //     'activities' => 'required|json',
+        // ]);
 
         // Step 2: Prepare the prompt for the Gemini AI API
         $location = $request->input('location');
         $totalDays = $request->input('duration');
         $traveler = $request->input('traveler');
         $budget = $request->input('budget');
-        $activities = implode(', ', $request->input('activities'));
+        $activities = json_decode($request->input('activities'), true); // Decode JSON array
+        $activities = implode(', ', $activities);
+
+        // Replace session block with this:
+        $referenceCode = strtoupper(Str::random(8));
+        $tripDetail = TripDetail::create([
+            'reference_code' => $referenceCode,
+            'location' => $location,
+            'duration' => $totalDays,
+            'traveler' => $traveler,
+            'budget' => $budget,
+            'activities' => $activities
+        ]);
 
         $prompt = "
     You are a travel planning assistant. Generate a travel plan based on the following specifications and return it ONLY as a valid JSON object. Do not include any other text or explanations.
@@ -45,8 +61,9 @@ class TravelController extends Controller
 
     Please ensure:
     - At least **4 hotels** are suggested with detailed information.
-    - Each day in the itinerary includes at least **4 activities** with descriptions, cost, duration, best times, and coordinates.
+    - Each day in the itinerary includes at least **4 activities** with descriptions, cost, duration, best times, coordinates, and addresses.
     - Prices are in the local currency.
+    - Include comprehensive security advice specific to the location.
 
     Return a JSON object with these exact keys:
     {
@@ -55,7 +72,16 @@ class TravelController extends Controller
             \"local_customs_and_traditions\": \"string\",
             \"geographic_features_and_climate\": \"string\",
             \"historical_events_and_landmarks\": [{\"name\": \"string\", \"description\": \"string\"}],
-            \"cultural_highlights\": [{\"name\": \"string\", \"description\": \"string\"}]
+            \"cultural_highlights\": [{\"name\": \"string\", \"description\": \"string\"}],
+            \"security_advice\": {
+                \"overall_safety_rating\": \"string\",
+                \"emergency_numbers\": \"string\",
+                \"areas_to_avoid\": \"string\",
+                \"common_scams\": \"string\",
+                \"safety_tips\": [\"string\"],
+                \"health_precautions\": \"string\",
+                \"local_emergency_facilities\": [{\"name\": \"string\", \"address\": \"string\", \"phone\": \"string\"}]
+            }
         },
         \"hotels\": [
             {
@@ -76,6 +102,7 @@ class TravelController extends Controller
                         \"name\": \"string\",
                         \"description\": \"string\",
                         \"coordinates\": \"string\",
+                        \"address\": \"string\",
                         \"cost\": \"string\",
                         \"duration\": \"string\",
                         \"best_time\": \"string\"
@@ -143,7 +170,27 @@ class TravelController extends Controller
             'geographic_features_and_climate' => $travelPlan['location_overview']['geographic_features_and_climate'],
         ]);
 
-        //[p]        return $travelPlan['location_overview'];
+        // Save Security Advice
+        $securityAdvice = SecurityAdvice::create([
+            'location_overview_id' => $locationOverview->id,
+            'overall_safety_rating' => data_get($travelPlan, 'location_overview.security_advice.overall_safety_rating'),
+            'emergency_numbers' => data_get($travelPlan, 'location_overview.security_advice.emergency_numbers'),
+            'areas_to_avoid' => data_get($travelPlan, 'location_overview.security_advice.areas_to_avoid'),
+            'common_scams' => data_get($travelPlan, 'location_overview.security_advice.common_scams'),
+            'safety_tips' => data_get($travelPlan, 'location_overview.security_advice.safety_tips', []),
+            'health_precautions' => data_get($travelPlan, 'location_overview.security_advice.health_precautions')
+        ]);
+
+        // Save Emergency Facilities
+        $emergencyFacilities = data_get($travelPlan, 'location_overview.security_advice.local_emergency_facilities', []);
+        foreach ($emergencyFacilities as $facility) {
+            $securityAdvice->emergencyFacilities()->create([
+                'name' => data_get($facility, 'name'),
+                'address' => data_get($facility, 'address'),
+                'phone' => data_get($facility, 'phone')
+            ]);
+        }
+
         $historicalLandmarks = data_get($travelPlan, 'location_overview.historical_events_and_landmarks', []);
 
         foreach ($historicalLandmarks as $landmark) {
@@ -161,43 +208,95 @@ class TravelController extends Controller
 
         // Save Hotels
         foreach ($travelPlan['hotels'] as $hotelData) {
+            $hotelData['location_overview_id'] = $locationOverview->id;
             Hotel::create($hotelData);
         }
 
         // Save Itinerary and Activities
         foreach ($travelPlan['itinerary'] as $dayPlan) {
-            $itinerary = Itinerary::create(['day' => $dayPlan['day']]);
+            $itinerary = Itinerary::create([
+                'day' => $dayPlan['day'],
+                'location_overview_id' => $locationOverview->id
+            ]);
 
             foreach ($dayPlan['activities'] as $activityData) {
-                $itinerary->activities()->create($activityData);
+                $activityData['itinerary_id'] = $itinerary->id;
+                $activityData['location_overview_id'] = $locationOverview->id;
+                Activity::create($activityData);
             }
         }
 
         // Save Costs
         foreach ($travelPlan['costs'] as $costData) {
+            $costData['location_overview_id'] = $locationOverview->id;
             $cost = Cost::create($costData);
 
             foreach ($costData['transportation'] as $transportData) {
-                $cost->transportationCosts()->create($transportData);
+                $transportData['cost_id'] = $cost->id;
+                $transportData['location_overview_id'] = $locationOverview->id;
+                TransportationCost::create($transportData);
             }
 
             foreach ($costData['dining'] as $diningData) {
-                $cost->diningCosts()->create($diningData);
+                $diningData['cost_id'] = $cost->id;
+                $diningData['location_overview_id'] = $locationOverview->id;
+                DiningCost::create($diningData);
             }
         }
 
         // Save Additional Information
-        AdditionalInformation::create($travelPlan['additional_information']);
+        $additionalInfoData = $travelPlan['additional_information'];
+        $additionalInfoData['location_overview_id'] = $locationOverview->id;
+        AdditionalInformation::create($additionalInfoData);
 
-        // Step 5: Pass data to the view
-        // return view('travel-plan', ['travelPlan' => $travelPlan]);
+        // After creating LocationOverview, add this:
+        $tripDetail->update(['location_overview_id' => $locationOverview->id]);
 
-        // return view('travel-plan', [
-        //     'locationOverview' => $locationOverview,
-        //     'hotels' => $hotels,
-        //     'itineraries' => $itineraries,
-        //     'cost' => $cost,
-        //     'additionalInfo' => $additionalInfo,
-        // ]);
+        // At the end of the method, before the redirect
+        return redirect()->route('trips.show', $locationOverview->id)
+            ->with('reference_code', $referenceCode)
+            ->with('success', 'Travel plan generated successfully!');
+    }
+
+
+
+
+
+    public function show($tripId)
+    {
+        $locationOverview = LocationOverview::with([
+            'securityAdvice.emergencyFacilities',
+            'historicalEventsAndLandmarks',
+            'culturalHighlights'
+        ])->findOrFail($tripId);
+
+        $tripDetails = TripDetail::where('location_overview_id', $tripId)->firstOrFail();
+
+        return view('travelResult', [
+            'locationOverview' => $locationOverview,
+            'securityAdvice' => $locationOverview->securityAdvice,
+            'hotels' => Hotel::where('location_overview_id', $tripId)->get(),
+            'itineraries' => Itinerary::with('activities')
+                ->where('location_overview_id', $tripId)
+                ->orderBy('day')
+                ->get(),
+            'cost' => Cost::with(['transportationCosts', 'diningCosts'])
+                ->where('location_overview_id', $tripId)
+                ->firstOrFail(),
+            'additionalInfo' => AdditionalInformation::where('location_overview_id', $tripId)->first(),
+            'tripDetails' => $tripDetails,
+            'referenceCode' => $tripDetails->reference_code,
+            'location' => $tripDetails->location,
+            'duration' => $tripDetails->duration,
+            'traveler' => $tripDetails->traveler,
+            'budget' => $tripDetails->budget,
+            'activities' => $tripDetails->activities
+        ]);
+    }
+
+    public function showByReference($referenceCode)
+    {
+        return  $tripDetails = TripDetail::where('reference_code', $referenceCode)->firstOrFail();
+        return redirect()->route('trips.show', $tripDetails->location_overview_id);
     }
 }

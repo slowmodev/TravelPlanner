@@ -12,5 +12,6 @@ class AdditionalInformation extends Model
         'timezone',
         'weather_forecast',
         'transportation_options',
+        'location_overview_id'
     ];
 }

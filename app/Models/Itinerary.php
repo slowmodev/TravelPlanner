@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 
 class Itinerary extends Model
 {
-    protected $fillable = ['day'];
+    protected $fillable = ['day', 'location_overview_id'];
 
     public function activities()
     {

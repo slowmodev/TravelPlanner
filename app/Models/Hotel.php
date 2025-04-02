@@ -14,5 +14,6 @@ class Hotel extends Model
         'description',
         'coordinates',
         'image_url',
+        'location_overview_id',
     ];
 }

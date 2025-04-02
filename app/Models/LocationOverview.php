@@ -21,4 +21,29 @@ class LocationOverview extends Model
     {
         return $this->hasMany(CulturalHighlight::class);
     }
+
+    public function securityAdvice()
+    {
+        return $this->hasOne(SecurityAdvice::class);
+    }
+
+    public function hotels()
+    {
+        return $this->hasMany(Hotel::class);
+    }
+
+    public function itineraries()
+    {
+        return $this->hasMany(Itinerary::class);
+    }
+
+    public function costs()
+    {
+        return $this->hasOne(Cost::class);
+    }
+
+    public function additionalInformation()
+    {
+        return $this->hasOne(AdditionalInformation::class);
+    }
 }

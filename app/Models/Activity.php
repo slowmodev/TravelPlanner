@@ -10,6 +10,7 @@ class Activity extends Model
         'name',
         'description',
         'coordinates',
+        'address',
         'cost',
         'duration',
         'best_time',
